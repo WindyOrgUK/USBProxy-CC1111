@@ -1,11 +1,8 @@
-#ifndef __GLOBALH__
-#define __GLOBALH__
-
 #include "global.h"
 
 // used for debugging and tracing execution.  see client's ".getDebugCodes()"
-xdata u8 lastCode[2];
-xdata u32 clock;
+__xdata u8 lastCode[2];
+__xdata u32 clock;
 
 
 
@@ -21,12 +18,14 @@ void sleepMillis(int ms)
 
 void sleepMicros(int us) 
 {
+    // this while loop for an int takes 11 instructions, which takes 4.5833uS and 4.2308uS
+    // at 24MHz and 26MHz
+    us *= PLATFORM_CLOCK_FREQ/11;
     while (--us > 0) ;
 }
 
 void blink_binary_baby_lsb(u16 num, char bits)
 {
-    //EA=0;
     LED = 1;
     sleepMillis(1000);
     LED = 0;
@@ -55,7 +54,6 @@ void blink_binary_baby_lsb(u16 num, char bits)
     }
     LED = 0;
     sleepMillis(1000);
-    //EA=1;
 }
 
 /*
@@ -88,7 +86,7 @@ void blink_binary_baby_msb(u16 num, char bits)
 }*/
 
 /* FIXME: not convinced libc hurts us that much
-int memcpy(volatile xdata void* dst, volatile xdata void* src, u16 len)
+int memcpy(volatile __xdata void* dst, volatile __xdata void* src, u16 len)
 {
     u16 loop;
     for (loop^=loop;loop<len; loop++)
@@ -98,7 +96,7 @@ int memcpy(volatile xdata void* dst, volatile xdata void* src, u16 len)
     return loop+1;
 }
 
-int memset(volatile xdata void* dst, const char ch, u16 len)
+int memset(volatile __xdata void* dst, const char ch, u16 len)
 {
     u16 loop;
     for (loop^=loop;loop<len; loop++)
@@ -211,5 +209,3 @@ void t1IntHandler(void) interrupt T1_VECTOR  // interrupt handler should trigger
     clock ++;
 }
 
-
-#endif

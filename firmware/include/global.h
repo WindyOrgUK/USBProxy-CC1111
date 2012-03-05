@@ -1,13 +1,22 @@
 #ifndef GLOBAL_H
 #define GLOBAL_H
 
-#include "cc1111.h"
-#include "cc1111usbdebug.h"
+#include "types.h"
+
+#ifdef CC1111
+  #include "cc1111.h"
+#elif defined CC2531
+  #include "cc2531.h"
+#elif defined IMME
+  #include <cc1110.h>
+  #include "cc1110-ext.h"
+#endif
+
 #include "bits.h"
 
 // used for debugging and tracing execution.  see client's ".getDebugCodes()"
-extern xdata u8 lastCode[2];
-extern xdata u32 clock;
+extern __xdata u8 lastCode[2];
+extern __xdata u32 clock;
 
 //////////////  DEBUG   //////////////
 //#define VIRTUAL_COM
@@ -33,13 +42,21 @@ extern xdata u32 clock;
 #define LCE_RF_RXOVF                            0x10
 #define LCE_RF_TXUNF                            0x11
 
+// USB activities
+#define USB_ENABLE_PIN              P1_0
+//#define USB_ENABLE_PIN              P1_1
+#define NOP()                       __asm; nop; __endasm;
+
+// Checks
+#define IS_XOSC_STABLE()    (SLEEP & SLEEP_XOSC_S)
+
 
 /* board-specific defines */
 #ifdef IMME
     // CC1110 IMME pink dongle - 26mhz
     #define LED_RED   P2_3
     #define LED_GREEN P2_4
-    #define SLEEPTIMER  1100
+    #define SLEEPTIMER  1200
     #define PLATFORM_CLOCK_FREQ 26
     
  #include "immedisplay.h"
@@ -47,20 +64,28 @@ extern xdata u32 clock;
  #include "immeio.h"
  //#include "pm.h"
 
-#elif defined DONSDONGLES
-    // CC1111 USB Dongle with breakout debugging pins (EMK?) - 24mhz
-    #define LED_RED   P1_1
-    #define LED_GREEN P1_1
-    #define SLEEPTIMER  1200
-    #define CC1111EM_BUTTON P1_2
+#else
+    #define SLEEPTIMER  1100
     #define PLATFORM_CLOCK_FREQ 24
+void usbIntHandler(void) interrupt P2INT_VECTOR;
+void p0IntHandler(void) interrupt P0INT_VECTOR;
 
-#elif defined CHRONOSDONGLE
-    // CC1111 USB Chronos watch dongle - 24mhz
-    #define LED_RED   P1_0
-    #define LED_GREEN P1_0
-    #define SLEEPTIMER  1200
-    #define PLATFORM_CLOCK_FREQ 24
+    #if defined DONSDONGLES
+        // CC1111 USB Dongle with breakout debugging pins (EMK?) - 24mhz
+        #define LED_RED   P1_1
+        #define LED_GREEN P1_1
+        #define CC1111EM_BUTTON P1_2
+
+    #elif defined CHRONOSDONGLE
+        // CC1111 USB Chronos watch dongle - 24mhz
+        #define LED_RED   P1_0
+        #define LED_GREEN P1_0
+
+    #elif defined CC2531
+        // CC2531 USB 802.15.4 emk - 24mhz
+        #define LED_RED   P1_0      //??
+        #define LED_GREEN P1_0      //??
+    #endif
 #endif
 
 #define LED     LED_GREEN

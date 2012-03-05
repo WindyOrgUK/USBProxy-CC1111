@@ -26,8 +26,8 @@
 USB_STATE usb_data;
 xdata u8  usb_ep0_OUTbuf[EP0_MAX_PACKET_SIZE];                  // these get pointed to by the above structure
 xdata u8  usb_ep5_OUTbuf[EP5OUT_MAX_PACKET_SIZE];               // these get pointed to by the above structure
-xdata USB_EP_IO_BUF     ep0iobuf;
-xdata USB_EP_IO_BUF     ep5iobuf;
+xdata USB_EP_IO_BUF     ep0;
+xdata USB_EP_IO_BUF     ep5;
 xdata u8 appstatus;
 
 xdata u8   ep0req;
@@ -62,64 +62,6 @@ int _usb_internal_handle_vendor(USB_Setup_Header* pReq);
 // * appstatus
 // * usb_data.usbstatus  - usb state overall...  (IDLE, SUSPEND, RESUME, RESET)
 // * ep#iobuf.ep_status  - endpoint status
-/*************************************************************************************************
- * experimental!  don't know the full ramifications of using this function yet.  it could cause  *
- * the universe to explode!                                                                      *
- ************************************************************************************************/
-void txdataold(u8 app, u8 cmd, u16 len, u8* dataptr)      // assumed EP5 for application use
-    // gonna try this direct this time, and ignore all the "state tracking" for the endpoint.
-    // wish me luck!  this could horribly crash and burn.
-{
-    u16 loop;
-    u8 firsttime=1;
-    USBINDEX=5;
-
-    while (len>0)
-     {
-        // if we do this in the loop, for some reason ep5iobuf.flags never clears between frames.  
-        // don't know why since this bit is cleared in the USB ISR.
-        loop = TXDATA_MAX_WAIT;
-        while (ep5iobuf.flags & EP_INBUF_WRITTEN && loop>0)                   // has last msg been recvd?
-        {
-            REALLYFASTBLINK();
-            lastCode[1] = LCE_USB_EP5_TX_WHILE_INBUF_WRITTEN;
-            loop--;
-        }
-            
-        if (firsttime==1)
-        {                                             // first time through only please
-            firsttime=0;
-            USBF5 = 0x40;
-            USBF5 = app;
-            USBF5 = cmd;
-            USBF5 = len & 0xff;
-            USBF5 = len >> 8;
-            if (len>EP5IN_MAX_PACKET_SIZE-5)
-                loop=EP5IN_MAX_PACKET_SIZE-5;
-            else
-                loop=len;
-
-        } else 
-        {
-            if (len>EP5IN_MAX_PACKET_SIZE)
-                loop=EP5IN_MAX_PACKET_SIZE;
-            else
-                loop=len;
-        }
-
-
-        len -= loop;
-
-
-        for (;loop>0;loop--)
-        {
-            USBF5 = *dataptr++;
-        }
-        
-        USBCSIL |= USBCSIL_INPKT_RDY;
-        ep5iobuf.flags |= EP_INBUF_WRITTEN;                         // set the 'written' flag
-    }
-}
 
 void txdata(u8 app, u8 cmd, u16 len, xdata u8* dataptr)      // assumed EP5 for application use
     // gonna try this direct this time, and ignore all the "state tracking" for the endpoint.
