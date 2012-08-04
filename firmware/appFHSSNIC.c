@@ -264,7 +264,7 @@ void t2IntHandler(void) interrupt T2_VECTOR  // interrupt handler should trigger
                 packet[26] = 'H';
                 packet[27] = ' ';
 
-                transmit((xdata u8*)&packet[1], 28);
+                transmit((xdata u8*)&packet[1], 28, 0, 0);
                 macdata.synched_chans++;
                 break;
 
@@ -276,7 +276,7 @@ void t2IntHandler(void) interrupt T2_VECTOR  // interrupt handler should trigger
                 {
                     LED = !LED;
                     sleepMillis(FHSS_TX_SLEEP_DELAY);
-                    transmit(&g_txMsgQueue[macdata.txMsgIdxDone][!(PKTCTRL0&1)], g_txMsgQueue[macdata.txMsgIdxDone][0]);
+                    transmit(&g_txMsgQueue[macdata.txMsgIdxDone][!(PKTCTRL0&1)], g_txMsgQueue[macdata.txMsgIdxDone][0], 0, 0);
                     // FIXME: rudimentary FHSS_tx in interrupt handler, make more elegant (with confirmation or somesuch?)
                     g_txMsgQueue[macdata.txMsgIdxDone][0] = 0;
 
@@ -538,7 +538,7 @@ void appMainLoop(void)
                         {
                             txdata(APP_NIC, NIC_RECV, (u8)rfrxbuf[processbuffer][0], (u8*)&rfrxbuf[processbuffer][1]);
                         } else {
-                            txdata(APP_NIC, NIC_RECV, PKTLEN, (u8*)&rfrxbuf[processbuffer]);
+                            txdata(APP_NIC, NIC_RECV, rfRxInfMode ? rfRxLargeLen : PKTLEN, (u8*)&rfrxbuf[processbuffer]);
                         }
 
                         /* Set receive buffer to processed so it can be used again */
@@ -575,7 +575,7 @@ void appReturn(xdata u8 len, xdata u8* response)
 int appHandleEP5()
 {   // not used by VCOM
 #ifndef VIRTUAL_COM
-    __xdata u16 len;
+    __xdata u16 len, repeat, offset;
     __xdata u8 *buf = &ep5.OUTbuf[0];
 
     switch (ep5.OUTapp)
@@ -622,13 +622,45 @@ int appHandleEP5()
                         debug("crap, please use FHSSxmit() instead!");
                         break;
                     }
-
-                    //transmit(buf, 0);
                     len = *buf++;
-                    transmit(buf, len);
-                    //ep5.flags &= ~EP_OUTBUF_WRITTEN;                       // this should be superfluous... but could be causing problems?
+                    len += (*buf++) << 8;
+                    repeat = *buf++;
+                    repeat += (*buf++) << 8;
+                    offset = *buf++;
+                    offset += (*buf++) << 8;
+                    transmit(buf, len, repeat, offset);
                     appReturn( 1, (xdata u8*)&len);
                     break;
+
+                case NIC_SET_RECV_LARGE:
+                    // configure large block receive (infinite mode)
+                    // call with block size of 0 to switch off
+                    rfRxLargeLen = *buf++;
+                    rfRxLargeLen += (*buf++) << 8;
+                    if(rfRxLargeLen)
+                    {
+                        rfRxInfMode = 1;
+                        // starting a new packet?
+                        if(!rfRxTotalRXLen)
+                        {
+                            IdleMode();
+                            rfRxTotalRXLen = rfRxLargeLen;
+                            PKTLEN = (u8) (rfRxTotalRXLen % 256);
+                            PKTCTRL0 &= ~PKTCTRL0_LENGTH_CONFIG;
+                            PKTCTRL0 |= PKTCTRL0_LENGTH_CONFIG_INF;
+                            RxMode();
+                        }
+                    }
+                    else
+                    {
+                        rfRxInfMode = 0;
+                        rfRxTotalRXLen = 0;
+                        rfRxLargeLen = 0;
+                        IdleMode();
+                    }
+                    txdata(ep5.OUTapp, ep5.OUTcmd, 1, (xdata u8*)&rfRxLargeLen);
+                    break;
+
                     
                 case NIC_SET_ID:
                     MAC_set_NIC_ID(*buf);
