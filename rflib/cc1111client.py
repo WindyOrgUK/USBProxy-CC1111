@@ -4,6 +4,7 @@ import usb
 
 import bits
 from chipcondefs import *
+from rflib_version import *
 
 # band limits in Hz
 FREQ_MIN_300  = 281000000
@@ -67,6 +68,7 @@ SYS_CMD_STATUS                  = 0x83
 SYS_CMD_POKE_REG                = 0x84
 SYS_CMD_GET_CLOCK               = 0x85
 SYS_CMD_BUILDTYPE               = 0x86
+SYS_CMD_BOOTLOADER              = 0x87
 SYS_CMD_RESET                   = 0x8f
 
 EP0_CMD_GET_DEBUG_CODES         = 0x00
@@ -304,12 +306,13 @@ class USBDongle:
 
         for bus in usb.busses():
             for dev in bus.devices:
-                if dev.idProduct == 0x4715:
-                    if self._debug: print >>sys.stderr,(dev)
-                    do = dev.open()
-                    iSN = do.getDescriptor(1,0,50)[16]
-                    devnum = dev.devnum
-                    dongles.append((devnum, dev, do))
+                # OpenMoko assigned or Legacy TI
+                if (dev.idVendor == 0x0451 and dev.idProduct == 0x4715) or (dev.idVendor == 0x1d50 and (dev.idProduct == 0x6047 or dev.idProduct == 0x6048)):
+                        if self._debug: print >>sys.stderr,(dev)
+                        do = dev.open()
+                        iSN = do.getDescriptor(1,0,50)[16]
+                        devnum = dev.devnum
+                        dongles.append((devnum, dev, do))
 
         dongles.sort()
         if len(dongles) == 0:
@@ -820,6 +823,16 @@ class USBDongle:
         stop = time.time()
         return (good,bad,stop-start)
 
+    def bootloader(self):
+        '''
+        switch to bootloader mode. based on Fergus Noble's CC-Bootloader (https://github.com/fnoble/CC-Bootloader)
+        this allows the firmware to be updated via USB instead of goodfet/ccdebugger
+        '''
+        try:
+            r = self.send(APP_SYSTEM, SYS_CMD_BOOTLOADER, "")
+        except ChipconUsbTimeoutException:
+            pass
+        
     def RESET(self):
         try:
             r = self.send(APP_SYSTEM, SYS_CMD_RESET, "RESET_NOW\x00")
@@ -1119,7 +1132,11 @@ class USBDongle:
             radiocfg = self.radiocfg
         output = []
 
-        output.append( "== Frequency Configuration ==")
+        output.append( "== Hardware ==")
+        output.append( self.reprHardwareConfig())
+        output.append( "\n== Software ==")
+        output.append( self.reprSoftwareConfig())
+        output.append( "\n== Frequency Configuration ==")
         output.append( self.reprFreqConfig(mhz, radiocfg))
         output.append( "\n== Modem Configuration ==")
         output.append( self.reprModemConfig(mhz, radiocfg))
@@ -1135,6 +1152,28 @@ class USBDongle:
         output.append( self.reprClientState())
         return "\n".join(output)
 
+    def reprHardwareConfig(self):
+        output= []
+
+        hardware= self.getBuildInfo()
+        output.append("Dongle:              %s" % hardware.split(' ')[0])
+        try:
+            output.append("Firmware rev:        %s" % hardware.split('r')[1])
+        except:
+            output.append("Firmware rev:        Not found! Update needed!")
+        # see if we have a bootloader by loooking for it's recognition semaphores
+        # in SFR I2SCLKF0 & I2SCLKF1
+        if(self.peek(0xDF46,1) == '\xF0' and self.peek(0xDF47,1) == '\x0D'):
+            output.append("Bootloader:          CC-Bootloader")
+        else:
+            output.append("Bootloader:          Not installed")
+        return "\n".join(output)
+
+    def reprSoftwareConfig(self):
+        output= []
+
+        output.append("rflib rev:           %s" % RFLIB_VERSION)
+        return "\n".join(output)
 
     def reprMdmModulation(self, radiocfg=None):
         mod = self.getMdmModulation(radiocfg)

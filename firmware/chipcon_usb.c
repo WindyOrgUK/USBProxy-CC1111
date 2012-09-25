@@ -1,6 +1,7 @@
 #include "global.h"
 #include "cc1111usb.h"
 #include "chipcon_dma.h"
+#include "bootloader.h"
 
 
 /*************************************************************************************************
@@ -48,15 +49,40 @@ __code u8 sdccver[] = {
     'S','D','C','C','v',
     LE_WORD(SDCC)
 };
+// BUILD_VERSION is passed in -D from Makefile
 __code u8 buildname[] = {
 #ifdef DONSDONGLES
-    "DONSDONGLE\x00",
+    'D','O','N','S','D','O','N','G','L','E',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
 #elif defined CHRONOSDONGLE
-    "CHRONOS   \x00",
+    'C','H','R','O','N','O','S',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
 #else
-    "IMME      \x00",
+    'I','M','M','E',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
 #endif
 };
+
+// USB endpoint
+#ifdef DONSDONGLES
+    #define ID_VENDOR      0x1D50
+    #define ID_PRODUCT     0x6048
+    #define MANU_LEN       12
+    #define MANUFACTURER   'R',0,'f',0,'C',0,'a',0,'t',0
+    #define PROD_LEN       24
+    #define PRODUCT_NAME   'D',0,'o',0,'n',0,'s',0,' ',0,'D',0,'o',0,'n',0,'g',0,'l',0,'e',0
+#elif defined CHRONOSDONGLE
+    #define ID_VENDOR      0x1D50
+    #define ID_PRODUCT     0x6047
+    #define MANU_LEN       12
+    #define MANUFACTURER   'R',0,'f',0,'C',0,'a',0,'t',0
+    #define PROD_LEN       30
+    #define PRODUCT_NAME   'C',0,'h',0,'r',0,'o',0,'n',0,'o',0,'s',0,' ',0,'D',0,'o',0,'n',0,'g',0,'l',0,'e',0
+#else
+    #define ID_VENDOR      0x0451
+    #define ID_PRODUCT     0x4715
+    #define MANU_LEN       36
+    #define MANUFACTURER   'a',0, 't',0, 'l',0, 'a',0, 's',0, ' ',0, 'i', 0 , 'n', 0 , 's', 0 , 't', 0 , 'r', 0 , 'u', 0 , 'm', 0 , 'e', 0 , 'n', 0 , 't', 0 , 's', 0 
+    #define PROD_LEN       28
+    #define PRODUCT_NAME   'C', 0, 'C', 0, '1', 0, '1', 0, '1', 0, '1', 0, ' ', 0, 'U', 0, 'S', 0, 'B', 0, ' ', 0, 'n', 0, 'i', 0, 'c', 0
+#endif
 
 int _usb_internal_handle_vendor(USB_Setup_Header* pReq);
 // state tracking:
@@ -981,6 +1007,13 @@ void processOUTEP5(void)
                 txdata(ep5.OUTapp, ep5.OUTcmd, sizeof(buildname), (xdata u8*)&buildname[0]);
                 break;
 
+            case CMD_BOOTLOADER:
+                // acknowledge first since we won't be coming back!
+                txdata(ep5.OUTapp,ep5.OUTcmd,ep5.OUTlen,ptr);
+                sleepMillis(200);
+                run_bootloader();
+                break;
+
             case CMD_RESET:
                 if (strncmp(ptr, "RESET_NOW", 9))
                     break;   //didn't match the signature.  must have been an accident.
@@ -1198,8 +1231,8 @@ __code u8 USBDESCBEGIN [] = {
                0x00,                    // bDeviceSubClass
                0x00,                    // bDeviceProtocol
                EP0_MAX_PACKET_SIZE,     //   EP0_PACKET_SIZE
-               LE_WORD(0x0451),         // idVendor Texas Instruments
-               LE_WORD(0x4715),         // idProduct CC1111
+               LE_WORD(ID_VENDOR),      // idVendor
+               LE_WORD(ID_PRODUCT),      // idProduct
                LE_WORD(0x0100),         // bcdDevice             (change to hardware version)
                0x01,                    // iManufacturer
                0x02,                    // iProduct
@@ -1258,53 +1291,20 @@ __code u8 USBDESCBEGIN [] = {
                0x09,                    // US-EN
                0x04,
 // Manufacturer
-               36,                      // bLength
+               MANU_LEN,                // bLength
                USB_DESC_STRING,         // bDescriptorType
-               'a',0,
-               't',0,
-               'l',0,
-               'a',0,
-               's',0,
-               ' ',0,
-               'i', 0 ,
-               'n', 0 ,
-               's', 0 ,
-               't', 0 ,
-               'r', 0 ,
-               'u', 0 ,
-               'm', 0 ,
-               'e', 0 ,
-               'n', 0 ,
-               't', 0 ,
-               's', 0 ,
+               MANUFACTURER,
 // Product
-               30,                      // bLength
+               PROD_LEN,                // bLength
                USB_DESC_STRING,         // bDescriptorType
-               'C', 0,
-               'C', 0,
-               '1', 0,
-               '1', 0,
-               '1', 0,
-               '1', 0,
-               ' ', 0,
-               'U', 0,
-               'S', 0,
-               'B', 0,
-               ' ', 0,
-               'n', 0,
-               'i', 0,
-               'c', 0,
-               //.DB 'k', 0
-               //.DB 'a', 0
-               //.DB 's', 0
-               //.DB 's', 0
+               PRODUCT_NAME,
 // Serial number
                10,                      // bLength
                USB_DESC_STRING,         // bDescriptorType
               '0', 0,
-              '0', 0,
-              '4', 0,
-              '6', 0,
+              '1', 0,
+              '9', 0,
+              '8', 0,
           
 // END OF STRINGS (len 0, type ff)
                0, 0xff

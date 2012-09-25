@@ -1,5 +1,9 @@
+# set BOOTLOADER_SIZE to match your bootloader
+BOOTLOADER_SIZE = 0x1400
+LDFLAGS_FLASH = --code-loc $(BOOTLOADER_SIZE)
+
 CC=sdcc
-CFLAGS=-Iinclude
+CFLAGS=-Iinclude -DBUILD_VERSION=`hg parent --template '{rev}'`
 CFLAGSold=--no-pack-iram $(CF)
 LFLAGS=--xram-loc 0xF000 
 
@@ -12,20 +16,20 @@ apps1111d = cc1111rf.reld global.reld cc1111_aes.reld
 apps1111i = cc1111rf.reli global.reli cc1111_aes.reli
 appsid = cc1111rf.relid global.relid cc1111_aes.relid
 
-libsvcom = cc1111_vcom.rel cc1111_vcomdesc.rel chipcon_usbdebug.rel #chipcon_usb.rel
-libsvcomc = cc1111_vcom.relc cc1111_vcomdesc.relc chipcon_usbdebug.relc #chipcon_usb.rel
-libsvcomd = cc1111_vcom.reld cc1111_vcomdesc.reld chipcon_usbdebug.reld #chipcon_usb.rel
-libsvcomi = cc1111_vcom.reli cc1111_vcomdesc.reli chipcon_usbdebug.reli #chipcon_usb.rel
+libsvcom = cc1111_vcom.rel cc1111_vcomdesc.rel chipcon_usbdebug.rel chipcon_dma.rel #chipcon_usb.rel
+libsvcomc = cc1111_vcom.relc cc1111_vcomdesc.relc chipcon_usbdebug.relc chipcon_dma.relc #chipcon_usb.rel
+libsvcomd = cc1111_vcom.reld cc1111_vcomdesc.reld chipcon_usbdebug.reld chipcon_dma.reld #chipcon_usb.rel
+libsvcomi = cc1111_vcom.reli cc1111_vcomdesc.reli chipcon_usbdebug.reli chipcon_dma.reli #chipcon_usb.rel
 
-libsusb  = chipcon_usb.rel chipcon_usbdebug.rel chipcon_dma.rel
-libsusbc  = chipcon_usb.rc chipcon_usbdebug.relc chipcon_dma.relc
+libsusb  = chipcon_usb.rel chipcon_usbdebug.rel chipcon_dma.rel bootloader.rel
+libsusbc  = chipcon_usb.rc chipcon_usbdebug.relc chipcon_dma.relc bootloader.relc
 libsusbd3 = chipcon_usb.rd3 chipcon_usbdebug.reld3 chipcon_dma.reld3
-libsusbd  = chipcon_usb.rd chipcon_usbdebug.reld chipcon_dma.reld
+libsusbd  = chipcon_usb.rd chipcon_usbdebug.reld chipcon_dma.reld bootloader.reld
 libsusbi  = immeusb.reli immeusbdebug.reli chipcon_dma.reli
 
-libsimme  = $(appsi) immeio.reli immekeys.reli immefont.reli   #  immedisplay.rel immeterm.rel
-libsimmed  = $(appsid) immeio.relid immekeys.relid immefont.relid   #  immedisplay.rel immeterm.rel
-libsi  = $(apps) immeio.rel immekeys.rel immefont.rel   #  immedisplay.rel immeterm.rel
+libsimme  = $(appsi) immeio.reli immekeys.reli immefont.reli chipcon_dma.reli  #  immedisplay.rel immeterm.rel
+libsimmed  = $(appsid) immeio.relid immekeys.relid immefont.relid chipcon_dma.relid  #  immedisplay.rel immeterm.rel
+libsi  = $(apps) immeio.rel immekeys.rel immefont.rel chipcon_dma.rel  #  immedisplay.rel immeterm.rel
 
 
 all: chronosFHSS.hex
@@ -65,9 +69,18 @@ chipcon_usb.rd : chipcon_usb.c
 
 
 # firmware build targets
+
 RfCatChronos.hex: appFHSSNIC.c $(libsusbc) $(apps1111c)
 	sdcc $(CFLAGS) $(LFLAGS) appFHSSNIC.c $(libsusb) $(apps1111) -DCHRONOSDONGLE
 	packihx <appFHSSNIC.ihx >bins/RfCatChronos.hex
+
+RfCatChronosCCBootloader.hex: appFHSSNIC.c $(libsusbc) $(apps1111c)
+	sdcc $(CFLAGS) $(LFLAGS) $(LDFLAGS_FLASH) appFHSSNIC.c $(libsusb) $(apps1111) -DCHRONOSDONGLE
+	packihx <appFHSSNIC.ihx >bins/RfCatChronosCCBootloader.hex
+
+RfCatDonsCCBootloader.hex: appFHSSNIC.c $(libsusbd) $(apps1111d)
+	sdcc $(CFLAGS) $(LFLAGS) $(LDFLAGS_FLASH) appFHSSNIC.c $(libsusb) $(apps1111) -DDONSDONGLES
+	packihx <appFHSSNIC.ihx >bins/RfCatDonsCCBootloader.hex
 
 RfCatDons.hex: appFHSSNIC.c $(libsusbd) $(apps1111d)
 	sdcc $(CFLAGS) $(LFLAGS) appFHSSNIC.c $(libsusb) $(apps1111) -DDONSDONGLES
@@ -164,61 +177,83 @@ testrecvapplication.hex: appNetworkTest.c $(libsvcomc) $(apps1111c)
 installRfCatChronosDongle: RfCatChronos.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/RfCatChronos.hex
+	goodfet.cc verify bins/RfCatChronos.hex
 	goodfet.cc info
+
+installRfCatChronosDongleCCBootloader: RfCatChronosCCBootloader.hex
+	bootload.py /dev/RFCAT_BL_C erase_all
+	bootload.py /dev/RFCAT_BL_C download bins/RfCatChronosCCBootloader.hex
+	bootload.py /dev/RFCAT_BL_C verify bins/RfCatChronosCCBootloader.hex && bootload.py /dev/RFCAT_BL_C run
 
 installRfCatDonsDongle: RfCatDons.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/RfCatDons.hex
+	goodfet.cc verify bins/RfCatDons.hex
 	goodfet.cc info
+
+installRfCatDonsDongleCCBootloader: RfCatDonsCCBootloader.hex
+	bootload.py /dev/RFCAT_BL_D erase_all
+	bootload.py /dev/RFCAT_BL_D download bins/RfCatDonsCCBootloader.hex
+	bootload.py /dev/RFCAT_BL_D verify bins/RfCatDonsCCBootloader.hex && bootload.py /dev/RFCAT_BL_D run
 
 installchronosfhssnicfw: chronosFHSS.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/chronosFHSS.hex
+	goodfet.cc verify bins/chronosFHSS.hex
 	goodfet.cc info
 	
 installdonsfhssnicfw: donsFHSS.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/donsFHSS.hex
+	goodfet.cc verify bins/donsFHSS.hex
 	goodfet.cc info
 	
 installchronosnicfw: chronosNIC.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/chronosNIC.hex
+	goodfet.cc verify bins/chronosNIC.hex
 	goodfet.cc info
 
 installdonsnicfw: donsNIC.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/donsNIC.hex
+	goodfet.cc verify bins/donsNIC.hex
 	goodfet.cc info
 
 installchronossnifffw: chronosSniff.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/chronosSniff.hex
+	goodfet.cc verify bins/chronosSniff.hex
 	goodfet.cc info
 
 installdonssnifffw: donsSniff.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/donsSniff.hex
+	goodfet.cc verify bins/donsSniff.hex
 	goodfet.cc info
 
 installimmesnifffw: immeSniff.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/immeSniff.hex
+	goodfet.cc verify bins/immeSniff.hex
 	goodfet.cc info
 
 installimmegame1: immeGame1.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/immeGame1.hex
+	goodfet.cc verify bins/immeGame1.hex
 	goodfet.cc info
 
 installimmegame2: immeGame2.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/immeGame2.hex
+	goodfet.cc verify bins/immeGame2.hex
 	goodfet.cc info
 
 installcc2531: cc2531.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/appCC2531.hex
+	goodfet.cc verify bins/appCC2531.hex
 	goodfet.cc info
 
 #installimmefw: immedongleapplication.hex
@@ -229,31 +264,49 @@ installcc2531: cc2531.hex
 installchronostestrecvusbfw: chronostestrecvusb.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testrecv.hex
+	goodfet.cc verify bins/testrecv.hex
 	goodfet.cc info
 
 installdonstestrecvusbfw: donstestrecvusb.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testrecv.hex
+	goodfet.cc verify bins/testrecv.hex
 	goodfet.cc info
 
 installchronostestxmitusbfw: chronostestxmitusb.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testxmit.hex
+	goodfet.cc verify bins/testxmit.hex
 	goodfet.cc info
 
 installdonstestxmitusbfw: donstestxmitusb.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testxmit.hex
+	goodfet.cc verify bins/testxmit.hex
 	goodfet.cc info
 
 installtestrecvfw: testrecvapplication.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testrecv.hex
+	goodfet.cc verify bins/testrecv.hex
 	goodfet.cc info
 
 installtestxmitfw: testxmitapplication.hex
 	goodfet.cc erase
 	goodfet.cc flash bins/testxmit.hex
+	goodfet.cc verify bins/testxmit.hex
+	goodfet.cc info
+
+installchronosbootloader: 
+	goodfet.cc erase
+	goodfet.cc flash CCBootloader/CCBootloader-rfcat-chronosdongle.hex
+	goodfet.cc verify CCBootloader/CCBootloader-rfcat-chronosdongle.hex
+	goodfet.cc info
+
+installdonsbootloader: 
+	goodfet.cc erase
+	goodfet.cc flash CCBootloader/CCBootloader-rfcat-donsdongle.hex
+	goodfet.cc verify CCBootloader/CCBootloader-rfcat-donsdongle.hex
 	goodfet.cc info
 
 testgoodfet:
@@ -266,6 +319,7 @@ backupdongle:
 restoredongle:
 	goodfet.cc erase
 	goodfet.cc flash bins/original-dongle-hex.backup
+	goodfet.cc verify bins/original-dongle-hex.backup
 	goodfet.cc info
 
 testall: RfCatChronos.hex RfCatDons.hex chronosapplication.hex donsapplication.hex chronostestrecvusb.hex donstestrecvusb.hex chronostestxmitusb.hex donstestxmitusb.hex testrecvapplication.hex testxmitapplication.hex chronosNIC.hex donsNIC.hex chronosFHSS.hex donsFHSS.hex chronosSniff.hex donsSniff.hex immeSniff.hex cc2531.hex
