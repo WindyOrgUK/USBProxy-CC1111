@@ -28,7 +28,7 @@ FREQ_MID_900  = 848000000
 EP_TIMEOUT_IDLE     = 400
 EP_TIMEOUT_ACTIVE   = 10
 
-USB_RX_WAIT         = 100
+USB_RX_WAIT         = 1000
 USB_TX_WAIT         = 10000
 
 USB_BM_REQTYPE_TGTMASK          =0x1f
@@ -71,6 +71,7 @@ SYS_CMD_POKE_REG                = 0x84
 SYS_CMD_GET_CLOCK               = 0x85
 SYS_CMD_BUILDTYPE               = 0x86
 SYS_CMD_BOOTLOADER              = 0x87
+SYS_CMD_RFMODE                  = 0x88
 SYS_CMD_RESET                   = 0x8f
 
 EP0_CMD_GET_DEBUG_CODES         = 0x00
@@ -102,10 +103,6 @@ SYNCM_CARRIER                   = 4
 SYNCM_CARRIER_15_of_16          = 5
 SYNCM_CARRIER_16_of_16          = 6
 SYNCM_CARRIER_30_of_32          = 7
-
-RF_STATE_RX                     = 1
-RF_STATE_TX                     = 2
-RF_STATE_IDLE                   = 3
 
 RF_SUCCESS                      = 0
 
@@ -249,8 +246,8 @@ MARC_STATE_MAPPINGS = [
     (22, 'MARC_STATE_TX_UNDERFLOW', RFST_SIDLE) # FIXME: this should actually be the config setting in register
 ]
 
-def keystop():
-    return len(select.select([sys.stdin],[],[],0)[0])
+def keystop(delay=0):
+    return len(select.select([sys.stdin],[],[],delay)[0])
 
 
 class ChipconUsbTimeoutException(Exception):
@@ -261,17 +258,20 @@ direct=False
 
 class USBDongle:
     ######## INITIALIZATION ########
-    def __init__(self, idx=0, debug=False, copyDongle=None):
+    def __init__(self, idx=0, debug=False, copyDongle=None, RfMode=RFST_SRX):
         self.rsema = None
         self.xsema = None
         self._bootloader = False
+        self._init_on_reconnect = True
         self._do = None
         self.idx = idx
         self.cleanup()
         self._debug = debug
+        self._quiet = False
         self._threadGo = threading.Event()
         self._recv_time = 0
         self.radiocfg = RadioConfig()
+        self._rfmode = RfMode
 
         self.recv_thread = threading.Thread(target=self.runEP5_recv)
         self.recv_thread.setDaemon(True)
@@ -293,7 +293,10 @@ class USBDongle:
         self.xmit_queue = []
         self.xmit_event.clear()
         self.trash = []
-    
+   
+    def setRFparameters(self):
+        pass
+
     def setup(self, console=True, copyDongle=None):
         global dongles
 
@@ -319,13 +322,13 @@ class USBDongle:
         for bus in usb.busses():
             for dev in bus.devices:
                 # OpenMoko assigned or Legacy TI
-                if (dev.idVendor == 0x0451 and dev.idProduct == 0x4715) or (dev.idVendor == 0x1d50 and (dev.idProduct == 0x6047 or dev.idProduct == 0x6048)):
-                        if self._debug: print >>sys.stderr,(dev)
-                        do = dev.open()
-                        iSN = do.getDescriptor(1,0,50)[16]
-                        devnum = dev.devnum
-                        dongles.append((devnum, dev, do))
-                elif (dev.idVendor == 0x1d50 and (dev.idProduct == 0x6049 or dev.idProduct == 0x6050)):
+                if (dev.idVendor == 0x0451 and dev.idProduct == 0x4715) or (dev.idVendor == 0x1d50 and (dev.idProduct == 0x6047 or dev.idProduct == 0x6048 or dev.idProduct == 0x605b)):
+                    if self._debug: print >>sys.stderr,(dev)
+                    do = dev.open()
+                    iSN = do.getDescriptor(1,0,50)[16]
+                    devnum = dev.devnum
+                    dongles.append((devnum, dev, do))
+                elif (dev.idVendor == 0x1d50 and (dev.idProduct == 0x6049 or dev.idProduct == 0x604a)):
                     print "Already in Bootloader Mode... exiting"
                     exit(0)
 
@@ -358,6 +361,8 @@ class USBDongle:
                 self._usbmaxo = ep.maxPacketSize
 
         self._threadGo.set()
+        if self._init_on_reconnect:
+            self.setRFparameters()
 
     def resetup(self, console=True, copyDongle=None):
         self._do=None
@@ -371,11 +376,13 @@ class USBDongle:
                 if copyDongle is None:
                     self._clear_buffers(False)
                 self.ping(3, wait=10, silent=True)
+                self.setRfMode(self._rfmode)
 
             except Exception, e:
                 #if console: sys.stderr.write('.')
-                print >>sys.stderr,("Error in resetup():" + repr(e))
-                if console or self._debug: print >>sys.stderr,("Error in resetup():" + repr(e))
+                if not self._quiet:
+                    print >>sys.stderr,("Error in resetup():" + repr(e))
+                #if console or self._debug: print >>sys.stderr,("Error in resetup():" + repr(e))
                 time.sleep(1)
 
 
@@ -470,7 +477,6 @@ class USBDongle:
         if self._debug: print >>sys.stderr,"RECV:"+repr(retary)
         if len(retary):
             return ''.join(retary)
-            #return retary
         return ''
 
     def _clear_buffers(self, clear_recv_mbox=False):
@@ -493,11 +499,8 @@ class USBDongle:
         self.send_threadcounter = 0
 
         while True:
-            #if self._debug: print "Waiting on device....",self._threadGo.isSet()
             self._threadGo.wait()
-
             self.send_threadcounter = (self.send_threadcounter + 1) & 0xffffffff
-            #if self._debug: print "Send Thread counter: ",self.send_threadcounter
 
             #### transmit stuff.  if any exists in the xmit_queue
             self.xmit_event.wait() # event driven xmit
@@ -505,17 +508,18 @@ class USBDongle:
             try:
                 if len(self.xmit_queue):
                     self.xsema.acquire()
+
                     msg = self.xmit_queue.pop(0)
                     if not len(self.xmit_queue): # if there was only one message
                         self.xmit_event.clear() # clear the queue, within the lock
+                    
                     self.xsema.release()
+
                     self._sendEP5(msg)
                     msgsent = True
+
                 else:
                     if self._debug>3: sys.stderr.write("NoMsgToSend ")
-            #except IndexError:
-                #if self._debug==3: sys.stderr.write("NoMsgToSend ")
-                #pass
             except:
                 sys.excepthook(*sys.exc_info())
 
@@ -524,15 +528,12 @@ class USBDongle:
         self.recv_threadcounter = 0
 
         while True:
-            #if self._debug: print "Waiting on device....",self._threadGo.isSet()
             self._threadGo.wait()
 
             self.recv_threadcounter = (self.recv_threadcounter + 1) & 0xffffffff
-            #if self._debug: print "Recv Thread counter: ",self.recv_threadcounter
             msgrecv = False
 
             #### handle debug application
-            if self._debug>2: print >> sys.stderr, "Looking for debug application"
             try:
                 q = None
                 b = self.recv_mbox.get(APP_DEBUG, None)
@@ -541,8 +542,8 @@ class USBDongle:
                         q = b[cmd]
                         if len(q):
                             buf,timestamp = q.pop(0)
-                            #cmd = ord(buf[1])
-                            if self._debug > 1: print >>sys.stderr,("buf length: %x\t\t cmd: %x\t\t(%s)"%(len(buf), cmd, repr(buf)))
+                            if self._debug > 1: print >>sys.stderr,("recvthread: buf length: %x\t\t cmd: %x\t\t(%s)"%(len(buf), cmd, repr(buf)))
+
                             if (cmd == DEBUG_CMD_STRING):
                                 if (len(buf) < 4):
                                     if (len(q)):
@@ -584,7 +585,7 @@ class USBDongle:
                 sys.excepthook(*sys.exc_info())
 
             #### receive stuff.
-            if self._debug>2: print >> sys.stderr, "Doing receiving...",self.ep5timeout
+            if self._debug>2: print >> sys.stderr, "recvthread: Doing receiving...",self.ep5timeout
             try:
                 #### first we populate the queue
                 msg = self._recvEP5(timeout=self.ep5timeout)
@@ -624,7 +625,7 @@ class USBDongle:
             except:
                 sys.excepthook(*sys.exc_info())
 
-            if self._debug>2: print >> sys.stderr, "Sorting mail..."
+            if self._debug>2: print >> sys.stderr, "recvthread: Sorting mail..."
             #### parse, sort, and deliver the mail.
             try:
                 # FIXME: is this robust?  or just overcomplex?
@@ -651,7 +652,7 @@ class USBDongle:
                             cmd = ord(msg[2])
                             length, = struct.unpack("<H", msg[3:5])
 
-                            if self._debug>1: print>>sys.stderr,("app=%x  cmd=%x  len=%x"%(app,cmd,length))
+                            if self._debug>1: print>>sys.stderr,("recvthread: app=%x  cmd=%x  len=%x"%(app,cmd,length))
 
                             if (msglen >= length+5):
                                 #### if the queue has enough characters to handle the next message... chop it and put it in the appropriate recv_mbox
@@ -659,8 +660,8 @@ class USBDongle:
                                 self.recv_queue = self.recv_queue[length+5:]        # chop it out of the queue
 
                                 b = self.recv_mbox.get(app,None)
+
                                 if self.rsema.acquire():                            # THREAD SAFETY DANCE
-                                    #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],0
                                     try:
                                         if (b == None):
                                             b = {}
@@ -669,25 +670,25 @@ class USBDongle:
                                         sys.excepthook(*sys.exc_info())
                                     finally:
                                         self.rsema.release()                            # THREAD SAFETY DANCE COMPLETE
-                                        #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],0
                                
                                 q = b.get(cmd)
+
                                 if self.rsema.acquire():                            # THREAD SAFETY DANCE
-                                    #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],1
                                     try:
                                         if (q is None):
                                             q = []
                                             b[cmd] = q
 
                                         q.append((msg, self._recv_time))
+
                                         # notify receivers that a new msg is available
                                         self.recv_event.set()
                                         self._recv_time = 0                         # we've delivered the current message
+
                                     except:
                                         sys.excepthook(*sys.exc_info())
                                     finally:
                                         self.rsema.release()                            # THREAD SAFETY DANCE COMPLETE
-                                        #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],1
                                
                             else:            
                                 if self._debug>1:     sys.stderr.write('=')
@@ -695,12 +696,11 @@ class USBDongle:
                             msg = self.recv_queue
                             msglen = len(msg)
                             # end of while loop
-                        #else:
-                        #    if self._debug:     sys.stderr.write('.')
+
             except:
                 sys.excepthook(*sys.exc_info())
 
-            if self._debug>2: print >> sys.stderr, "Loop finished"
+            if self._debug>2: print >> sys.stderr, "readthread: Loop finished"
             if not (msgrecv or len(msg)) :
                 #time.sleep(.1)
                 self.ep5timeout = EP_TIMEOUT_IDLE
@@ -712,43 +712,52 @@ class USBDongle:
 
     ######## APPLICATION API ########
     def recv(self, app, cmd=None, wait=USB_RX_WAIT):
+        '''
+        high-level USB EP5 receive.  
+        checks the mbox for app "app" and command "cmd" and returns the next one in the queue
+        if any of this does not exist yet, wait for a RECV event until "wait" times out.
+        RECV events are generated by the low-level recv thread "runEP5_recv()"
+        '''
         startTime = time.time()
+        self.recv_event.clear() # an event is only interesting if we've already failed to find our message
+
         while (time.time() - startTime)*1000 < wait:
             try:
                 b = self.recv_mbox.get(app)
                 if b:
                     if self._debug: print>>sys.stderr, "Recv msg",app,b,cmd
-                else:
-                    self.recv_event.wait((wait - (time.time() - startTime)*1000)/1000) # wait for a cmd to be received
-                    b = self.recv_mbox.get(app)
-                if cmd is None:
-                    keys = b.keys()
-                    if not len(keys):
-                        self.recv_event.wait((wait - (time.time() - startTime)*1000)/1000) # wait for a cmd to be received
+                    if cmd is None:
                         keys = b.keys()
-                    if len(keys):
-                        cmd = b.keys()[-1] # default to last cmd received
-                        if self._debug: print>>sys.stderr, "Using last cmd",cmd
-                if b is not None:
-                    self.recv_event.wait((wait - (time.time() - startTime)*1000)/1000) # wait on recv event, with timeout of remaining time
-                    self.recv_event.clear() # clear event, if it's set
+                        if len(keys):
+                            cmd = b.keys()[-1] # just grab one.   no guarantees on the order
+
+                if b is not None and cmd is not None:
                     q = b.get(cmd)
                     if self._debug: print >>sys.stderr,"debug(recv) q='%s'"%repr(q)
+
                     if q is not None and self.rsema.acquire(False):
-                        #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],2
+                        if self._debug>3: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],2
                         try:
                             resp, rt = q.pop(0)
+
                             self.rsema.release()
-                            #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],2
+                            if self._debug>3: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],2
+
+                            # bring it on home...  this is the way out.
                             return resp[4:], rt
+
                         except IndexError:
                             pass
-                            #sys.excepthook(*sys.exc_info())
+
                         except AttributeError:
                             sys.excepthook(*sys.exc_info())
                             pass
+
                         self.rsema.release()
-                        #if self._debug: print ("rsema.UNlocked", "rsema.locked")[self.rsema.locked()],2
+
+                self.recv_event.wait((wait - (time.time() - startTime)*1000)/1000) # wait on recv event, with timeout of remaining time
+                self.recv_event.clear() # clear event, if it's set
+
             except KeyboardInterrupt:
                 sys.excepthook(*sys.exc_info())
                 break
@@ -948,28 +957,36 @@ class USBDongle:
         mode = radiocfg.marcstate
         return (MODES[mode], mode)
 
+    ### set the RfMode
+    def setRfMode(self, rfmode, parms=''):
+        '''
+        sets the radio state to "rfmode", and makes 
+        '''
+        self._rfmode = rfmode
+        r = self.send(APP_SYSTEM, SYS_CMD_RFMODE, "%c" % (self._rfmode) + parms)
+
     ### set standard radio state to TX/RX/IDLE (TX is pretty much only good for jamming).  TX/RX modes are set to return to whatever state you choose here.
     def setModeTX(self):
         '''
         BOTH: set radio to TX state
         AND:  set radio to return to TX state when done with other states
         '''
-        self.setRfMode(RF_STATE_TX)
-
+        self.setRfMode(RFST_STX)       #FIXME: when firmware makes the change, so must this
+        
     def setModeRX(self):
         '''
         BOTH: set radio to RX state
         AND:  set radio to return to RX state when done with other states
         '''
-        self.setRfMode(RF_STATE_RX)
-
+        self.setRfMode(RFST_SRX)
+        
     def setModeIDLE(self):
         '''
         BOTH: set radio to IDLE state
         AND:  set radio to return to IDLE state when done with other states
         '''
-        self.setRfMode(RF_STATE_IDLE)
-
+        self.setRfMode(RFST_SIDLE)
+        
 
     ### send raw state change to radio (doesn't update the return state for after RX/TX occurs)
     def strobeModeTX(self):
@@ -1007,10 +1024,11 @@ class USBDongle:
         attempts to return the the correct mode after configuring some radio register(s).
         it uses the marcstate provided (or self.radiocfg.marcstate if none are provided) to determine how to strobe the radio.
         """
-        if marcstate is None:
-            marcstate = self.radiocfg.marcstate
-        if self._debug: print("MARCSTATE: %x   returning to %x" % (marcstate, MARC_STATE_MAPPINGS[marcstate][2]) )
-        self.poke(X_RFST, "%c"%MARC_STATE_MAPPINGS[marcstate][2])
+        #if marcstate is None:
+            #marcstate = self.radiocfg.marcstate
+        #if self._debug: print("MARCSTATE: %x   returning to %x" % (marcstate, MARC_STATE_MAPPINGS[marcstate][2]) )
+        #self.poke(X_RFST, "%c"%MARC_STATE_MAPPINGS[marcstate][2])
+        self.poke(X_RFST, "%c" % self._rfmode)
 
         
         
@@ -1037,6 +1055,17 @@ class USBDongle:
             #self.strobeModeTX()
         # if other than these, we can stay in IDLE
 
+    def setRFbits(self, addr, bitnum, bitsz, val, suppress=False):
+        ''' sets individual bits of a register '''
+        mask = ((1<<bitsz) - 1) << bitnum
+        rmask = ~mask
+
+        temp = ord(self.peek(addr)) & rmask
+        temp |= ((val << bitnum) & mask)
+
+        self.setRFRegister(addr, temp, suppress=suppress)
+
+    
     ### radio config
     def getRadioConfig(self):
         bytedef = self.peek(0xdf00, 0x3e)
@@ -1314,6 +1343,12 @@ class USBDongle:
         self.setRFRegister(PKTCTRL0, (radiocfg.pktctrl0))
         self.setRFRegister(PKTLEN, (radiocfg.pktlen))
 
+    def getPktLEN(self):
+        '''
+        returns (pktlen, pktctrl0)
+        '''
+        return (self.radiocfg.pktlen, self.radiocfg.pktctrl0 & PKTCTRL0_LENGTH_CONFIG)
+        
     def setEnablePktCRC(self, enable=True, radiocfg=None):
         if radiocfg==None:
             self.getRadioConfig()
@@ -1970,6 +2005,9 @@ class USBDongle:
     PA_TABLE0   = 0x83;
 """
 
+    def printRadioState(self, radiocfg=None):
+        print self.reprRadioState(radiocfg)
+
     def reprRadioState(self, radiocfg=None):
         output = []
         try:
@@ -1984,6 +2022,9 @@ class USBDongle:
             output.append("     DONGLE *not* RESPONDING")
 
         return "\n".join(output)
+
+    def printClientState(self, width=120):
+        print self.reprClientState(width)
 
     def reprClientState(self, width=120):
         output = ["="*width]

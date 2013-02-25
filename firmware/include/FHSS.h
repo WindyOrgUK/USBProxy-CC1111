@@ -13,7 +13,7 @@
 #define FHSS_START_SYNC         0x22
 #define FHSS_START_HOPPING      0x23
 #define FHSS_STOP_HOPPING       0x24
-
+#define FHSS_SET_MAC_PERIOD     0x25
 
 #define MAC_STATE_NONHOPPING        0
 #define MAC_STATE_DISCOVERY         1
@@ -58,8 +58,8 @@ void PHY_set_channel(u16 chan);
 void MAC_initChannels();
 void MAC_sync(u16 netID);
 void MAC_set_chanidx(u16 chanidx);
-void MAC_tx(u8* message, u8 len);
-void MAC_rx_handle(u8 len, u8* message);
+void MAC_tx(__xdata u8* message, u8 len);
+void MAC_rx_handle(u8 len, __xdata u8* message);
 u8 MAC_getNextChannel();
 
 
@@ -67,13 +67,14 @@ typedef struct MAC_DATA_s
 {
     u8 mac_state;
     // MAC parameters (FIXME: make this all cc1111fhssmac.c/h?)
-    u32 MAC_threshold;              // when the T2 clock as overflowed this many times, change channel
+    u16 MAC_threshold;              // when the T2 clock as overflowed this many times, change channel
+    u16 MAC_timer;                  // this tracks how many times it's overflowed (really?  32-bits for these two?!?)
     u16 NumChannels;                // in case of multiple paths through the available channels 
     u16 NumChannelHops;             // total number of channels in pattern (>= g_MaxChannels)
     u16 curChanIdx;                 // indicates current channel index of the hopping pattern
     u16 tLastStateChange;
     u16 tLastHop;
-    u16 desperatelySeeking;
+    u16 desperatelySeeking;         // this should be unnecessary, and should instead use mac_state?
     u8  txMsgIdx;
     u8  txMsgIdxDone;
     u16 synched_chans;

@@ -215,7 +215,7 @@ typedef struct {
     u16  OUTbytesleft;
     volatile u8   flags;
     u8   epstatus;
-    xdata u8* dptr;
+    __xdata u8* dptr;
 } USB_EP_IO_BUF;
 
 typedef struct USB_Device_Desc_Type {
@@ -299,21 +299,21 @@ typedef struct USB_Request_Type {
 // extern global variables
 extern __code u8 USBDESCBEGIN[];
 extern USB_STATE usb_data;
-extern xdata u8  usb_ep0_OUTbuf[EP0_MAX_PACKET_SIZE];                  // these get pointed to by the above structure
-extern xdata u8  usb_ep5_OUTbuf[EP5OUT_BUFFER_SIZE];               // these get pointed to by the above structure
-extern xdata USB_EP_IO_BUF     ep0;
-extern xdata USB_EP_IO_BUF     ep5;
-extern xdata u8 appstatus;
+extern __xdata u8  usb_ep0_OUTbuf[EP0_MAX_PACKET_SIZE];                  // these get pointed to by the above structure
+extern __xdata u8  usb_ep5_OUTbuf[EP5OUT_BUFFER_SIZE];               // these get pointed to by the above structure
+extern __xdata USB_EP_IO_BUF     ep0;
+extern __xdata USB_EP_IO_BUF     ep5;
+extern __xdata u8 appstatus;
 
-extern xdata u8   ep0req;
-extern xdata u16  ep0len;
-extern xdata u16  ep0value;
+extern __xdata u8   ep0req;
+extern __xdata u16  ep0len;
+extern __xdata u16  ep0value;
 
 // provided by cc1111usb.c
 void clock_init(void);
-int txdata(u8 app, u8 cmd, u16 len, xdata u8* dataptr);
+int txdata(u8 app, u8 cmd, u16 len, __xdata u8* dataptr);
 int setup_send_ep0(u8* payload, u16 length);
-int setup_sendx_ep0(xdata u8* payload, u16 length);
+int setup_sendx_ep0(__xdata u8* payload, u16 length);
 u16 usb_recv_ep0OUT();
 
 u16 usb_recv_epOUT(u8 epnum, USB_EP_IO_BUF* epiobuf);
@@ -324,10 +324,10 @@ void waitForUSBsetup();
 // export as this *must* be in main loop.
 void usbProcessEvents(void);
 
-void registerCb_ep0OutDone(void (*callback)(void));
-void registerCb_ep0Out(void (*callback)(void));
-void registerCb_ep0Vendor(void (*callback)(USB_Setup_Header* pReq));
-void registerCb_ep5(void (*callback)(void));
+void registerCb_ep0OutDone(int (*callback)(void));
+void registerCb_ep0Out(int (*callback)(void));
+void registerCb_ep0Vendor(int (*callback)(USB_Setup_Header* pReq));
+void registerCb_ep5(int (*callback)(void));
 
 
 
@@ -341,6 +341,7 @@ void registerCb_ep5(void (*callback)(void));
 #define     CMD_GET_CLOCK   0x85
 #define     CMD_BUILDTYPE   0x86
 #define     CMD_BOOTLOADER  0x87
+#define     CMD_RFMODE      0x88
 #define     CMD_RESET       0x8f
 
 #define     EP0_CMD_GET_DEBUG_CODES         0x00

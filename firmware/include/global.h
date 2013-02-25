@@ -107,14 +107,25 @@ extern __xdata u32 clock;
 #else
     #define SLEEPTIMER  1100
     #define PLATFORM_CLOCK_FREQ 24
-void usbIntHandler(void) interrupt P2INT_VECTOR;
-void p0IntHandler(void) interrupt P0INT_VECTOR;
+void usbIntHandler(void) __interrupt P2INT_VECTOR;
+void p0IntHandler(void) __interrupt P0INT_VECTOR;
 
     #if defined DONSDONGLES
         // CC1111 USB Dongle with breakout debugging pins (EMK?) - 24mhz
         #define LED_RED   P1_1
         #define LED_GREEN P1_1
         #define CC1111EM_BUTTON P1_2
+
+    #elif defined YARDSTICKONE
+        #define LED1          P1_1
+        #define LED_GREEN     P1_1
+        #define LED2          P1_2
+        #define LED_RED       P1_2
+        #define LED3          P1_3
+        #define LED_YELLOW    P1_3
+        #define TX_AMP_EN     P2_0
+        #define RX_AMP_EN     P2_4
+        #define AMP_BYPASS_EN P2_3
 
     #elif defined CHRONOSDONGLE
         // CC1111 USB Chronos watch dongle - 24mhz
@@ -140,7 +151,7 @@ void p0IntHandler(void) interrupt P0INT_VECTOR;
 /* function declarations */
 void sleepMillis(int ms);
 void sleepMicros(int us);
-void t1IntHandler(void) interrupt T1_VECTOR;  // interrupt handler should trigger on T1 overflow
+void t1IntHandler(void) __interrupt T1_VECTOR;  // interrupt handler should trigger on T1 overflow
 void clock_init(void);
 void io_init(void);
 //void blink(u16 on_cycles, u16 off_cycles);

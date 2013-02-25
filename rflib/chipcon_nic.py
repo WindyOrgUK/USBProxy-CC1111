@@ -1,19 +1,20 @@
 #!/usr/bin/env ipython
+import re
 import sys
 import usb
 import code
 import time
 import struct
+import pickle
 import threading
-import re
 #from chipcondefs import *
 from cc1111client import *
 
 APP_NIC =                       0x42
+APP_SPECAN =                    0x43
 NIC_RECV =                      0x1
 NIC_XMIT =                      0x2
 NIC_SET_ID =                    0x3
-NIC_RFMODE =                    0x4
 NIC_SET_RECV_LARGE =            0x5
 NIC_SET_AES_MODE =              0x6
 NIC_GET_AES_MODE =              0x7
@@ -71,23 +72,50 @@ T2SETTINGS_26MHz = {
     
 TIP = (64,128,256,1024)
 
-def calculateT2(ms, mhz=24):
+def makeFriendlyAscii(instring):
+    out = []
+    start = 0
+    last = -1
+    instrlen = len(instring)
+
+    for cidx in xrange(instrlen):
+        if (0x20 < ord(instring[cidx]) < 0x7f):
+            if last < cidx-1:
+                out.append( "." * (cidx-1-last))
+                start = cidx
+            last = cidx
+        else:
+            if last == cidx-1:
+                out.append( instring[ start:last+1 ] )
+
+    if last != cidx:
+        out.append( "." * (cidx-last) )
+    else: # if start == 0:
+        out.append( instring[ start: ] )
+
+    return ''.join(out)
+
+
+
+
+def calculateT2(tick_ms, mhz=24):
+    # each tick, not each cycle
     TICKSPD = [(mhz*1000000/pow(2,x)) for x in range(8)]
     
-    ms = 1.0*ms/1000
+    tick_ms = 1.0*tick_ms/1000
     candidates = []
     for tickidx in xrange(8):
         for tipidx in range(4):
             for PR in xrange(256):
                 T = 1.0 * PR * TIP[tipidx] / TICKSPD[tickidx]
-                if abs(T-ms) < .010:
+                if abs(T-tick_ms) < .010:
                     candidates.append((T, tickidx, tipidx, PR))
     diff = 1024
     best = None
     for c in candidates:
-        if abs(c[0] - ms) < diff:
+        if abs(c[0] - tick_ms) < diff:
             best = c
-            diff = abs(c[0] - ms)
+            diff = abs(c[0] - tick_ms)
     return best
     #return ms, candidates, best
             
@@ -99,14 +127,26 @@ class EnDeCode:
         raise Exception("EnDeCode.encode() not implemented.  Each subclass must implement their own")
 
 
+def savePkts(pkts, filename):
+    pickle.dump(pkts, file(filename, 'a'))
+def loadPkts(filename):
+    return pickle.load( file(filename, 'r'))
+
+def printSyncWords(syncworddict):
+    print "SyncWords seen:"
+
+    tmp = []
+    for x,y in syncworddict.items():
+        tmp.append((y,x))
+    tmp.sort()
+    for y,x in tmp:
+        print("0x%.4x: %d" % (x,y))
+
 
 class FHSSNIC(USBDongle):
-    def __init__(self, idx=0, debug=False, copyDongle=None):
-        USBDongle.__init__(self, idx, debug, copyDongle)
+    def __init__(self, idx=0, debug=False, copyDongle=None, RfMode=RFST_SRX):
+        USBDongle.__init__(self, idx, debug, copyDongle, RfMode)
         self.endec = None
-
-    def setRfMode(self, rfmode, parms=''):
-        r = self.send(APP_NIC, NIC_RFMODE, "%c"%rfmode + parms)
 
     def setAESmode(self, aesmode=AES_CRYPTO_DEFAULT):
         '''
@@ -210,7 +250,7 @@ class FHSSNIC(USBDongle):
 
             try:
                 y, t = self.RFrecv()
-                print "(%5.3f) Received:  %s" % (t, y.encode('hex'))
+                print "(%5.3f) Received:  %s  | %s" % (t, y.encode('hex'), makeFriendlyAscii(y))
 
             except ChipconUsbTimeoutException:
                 pass
@@ -229,7 +269,8 @@ class FHSSNIC(USBDongle):
 
             try:
                 y, t = self.RFrecv()
-                print "(%5.3f) Received:  %s" % (t, y.encode('hex'))
+                #print "(%5.3f) Received:  %s" % (t, y.encode('hex'))
+                print "(%5.3f) Received:  %s  | %s" % (t, y.encode('hex'), makeFriendlyAscii(y))
                 capture.append((y,t))
 
             except ChipconUsbTimeoutException:
@@ -241,7 +282,7 @@ class FHSSNIC(USBDongle):
         return capture
 
     def FHSSxmit(self, data):
-        self.send(APP_NIC, FHSS_XMIT, "%c%s" % (len(data)+1, data))
+        return self.send(APP_NIC, FHSS_XMIT, "%c%s" % (len(data), data))
 
     def changeChannel(self, chan):
         return self.send(APP_NIC, FHSS_CHANGE_CHANNEL, "%c" % (chan))
@@ -264,8 +305,12 @@ class FHSSNIC(USBDongle):
     def stopHopping(self):
         return self.send(APP_NIC, FHSS_STOP_HOPPING, '')
 
-    def setMACperiod(self, ms, mhz=24):
-        val = calculateT2(ms, mhz)
+    def setMACperiod(self, dwell_ms, mhz=24):
+        macdata = self.getMACdata()
+        cycles_per_channel = macdata[1]
+        ticks_per_cycle = 256
+        tick_ms = dwell_ms / (ticks_per_cycle * cycles_per_channel)
+        val = calculateT2(tick_ms, mhz)
         T, tickidx, tipidx, PR = val
         print "Setting MAC period to %f secs (%x %x %x)" % (val)
         t2ctl = (ord(self.peek(X_T2CTL)) & 0xfc)   | (tipidx)
@@ -282,7 +327,7 @@ class FHSSNIC(USBDongle):
     def getMACdata(self):
         datastr, timestamp = self.send(APP_NIC, FHSS_GET_MAC_DATA, '')
         print (repr(datastr))
-        data = struct.unpack("<BIHHHHHHBBH", datastr)
+        data = struct.unpack("<BHHHHHHHHBBH", datastr)
         return data
 
     def reprMACdata(self):
@@ -290,6 +335,7 @@ class FHSSNIC(USBDongle):
         return """\
 u8 mac_state                %x
 u32 MAC_threshold           %x
+u32 MAC_ovcount             %x
 u16 NumChannels             %x
 u16 NumChannelHops          %x
 u16 curChanIdx              %x
@@ -340,7 +386,7 @@ u16 synched_chans           %x
     def getPktAddr(self):
         return self.peek(ADDR)
 
-    def discover(self, lowball=1, debug=None, length=30, IdentSyncWord=False, SyncWordMatchList=None, Search=None, RegExpSearch=None):
+    def discover(self, lowball=1, debug=None, length=30, IdentSyncWord=False, ISWsensitivity=4, ISWminpreamble=2, SyncWordMatchList=None, Search=None, RegExpSearch=None):
         '''
         discover() sets lowball mode to the mode requested (length too), and begins to dump packets to the screen.  
                 press <enter> to quit, and your radio config will be set back to its original configuration.
@@ -353,19 +399,24 @@ u16 synched_chans           %x
             Search              - byte string to search through each received packet for (real bytes, not hex repr)
             RegExpSearch        - regular expression to search through received bytes (not the hex repr that is printed)
 
+        if IdentSyncWord == True (or SyncWordMatchList != None), returns a dict of unique possible SyncWords identified along with the number of times seen.
         '''
+        retval = {}
         oldebug = self._debug
-        if IdentSyncWord and lowball <= 1:
-            print "Entering Discover mode and searching for possible SyncWords..."
-            if SyncWordMatchList is not None:
-                print "  seeking one of: %s" % repr([hex(x) for x in SyncWordMatchList])
+        
+        if SyncWordMatchList != None:
+            IdentSyncWord = True
 
-        else:
-            if IdentSyncWord and lowball > 1: 
+        if IdentSyncWord:
+            if lowball <= 1:
+                print "Entering Discover mode and searching for possible SyncWords..."
+                if SyncWordMatchList != None:
+                    print "  seeking one of: %s" % repr([hex(x) for x in SyncWordMatchList])
+
+            else:
                 print "-- lowball too high -- ignoring request to IdentSyncWord"
+                print "Entering Discover mode..."
                 IdentSyncWord = False
-
-            print "Entering Discover mode..."
 
         self.lowball(level=lowball, length=length)
         if debug is not None:
@@ -400,12 +451,16 @@ u16 synched_chans           %x
                         ynext = bits.shiftString(ynext, 1)
 
                 if IdentSyncWord:
-                    if lowball == 1:
-                        y = '\xaa\xaa' + y
+                    #if lowball == 1:
+                    #    y = '\xaa\xaa' + y
 
-                    poss = bits.findDword(y)
+                    poss = bits.findSyncWord(y, ISWsensitivity, ISWminpreamble)
                     if len(poss):
                         print "  possible Sync Dwords: %s" % repr([hex(x) for x in poss])
+                        for dw in poss:
+                            lst = retval.get(dw, 0)
+                            lst += 1
+                            retval[dw] = lst
 
                     if SyncWordMatchList is not None:
                         for x in poss:
@@ -421,6 +476,12 @@ u16 synched_chans           %x
         self._debug = oldebug
         self.lowballRestore()
         print "Exiting Discover mode..."
+
+        if len(retval) == 0:
+            return
+
+        printSyncWords(retval)
+        return retval
 
     def testTX(self, data="XYZABCDEFGHIJKL"):
         while (sys.stdin not in select.select([sys.stdin],[],[],0)[0]):

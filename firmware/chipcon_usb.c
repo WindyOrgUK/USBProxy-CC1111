@@ -25,25 +25,25 @@
 
 
 USB_STATE usb_data;
-xdata u8  usb_ep0_OUTbuf[EP0_MAX_PACKET_SIZE];                  // these get pointed to by the above structure
-xdata u8  usb_ep5_OUTbuf[EP5OUT_BUFFER_SIZE];                   // these get pointed to by the above structure
-xdata USB_EP_IO_BUF     ep0;
-xdata USB_EP_IO_BUF     ep5;
-xdata u8 appstatus;
+__xdata u8  usb_ep0_OUTbuf[EP0_MAX_PACKET_SIZE];                  // these get pointed to by the above structure
+__xdata u8  usb_ep5_OUTbuf[EP5OUT_BUFFER_SIZE];                   // these get pointed to by the above structure
+__xdata USB_EP_IO_BUF     ep0;
+__xdata USB_EP_IO_BUF     ep5;
+__xdata u8 appstatus;
 
-xdata u8   ep0req;
-xdata u16  ep0len;
-xdata u16  ep0value;
+__xdata u8   ep0req;
+__xdata u16  ep0len;
+__xdata u16  ep0value;
 
-//xdata dmacfg_t usbdma;
-xdata DMA_DESC *usbdma;
-data u8 usbdmachan, usbdmaarm;
-//xdata u8 usbdmar[8];
+//__xdata dmacfg_t usbdma;
+__xdata DMA_DESC *usbdma;
+__data u8 usbdmachan, usbdmaarm;
+//__xdata u8 usbdmar[8];
 
-__xdata void (*cb_ep0outdone)(void);
-__xdata void (*cb_ep0out)(void);
-__xdata void (*cb_ep0vendor)(USB_Setup_Header*);
-__xdata void (*cb_ep5)(void);
+__xdata int (*cb_ep0outdone)(void);
+__xdata int (*cb_ep0out)(void);
+__xdata int (*cb_ep0vendor)(USB_Setup_Header*);
+__xdata int (*cb_ep5)(void);
 
 __code u8 sdccver[] = {
     'S','D','C','C','v',
@@ -53,6 +53,8 @@ __code u8 sdccver[] = {
 __code u8 buildname[] = {
 #ifdef DONSDONGLES
     'D','O','N','S','D','O','N','G','L','E',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
+#elif defined YARDSTICKONE
+    'Y','A','R','D','S','T','I','C','K','O','N','E',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
 #elif defined CHRONOSDONGLE
     'C','H','R','O','N','O','S',' ','r',ASCII_LONG(BUILD_VERSION),'\x00',
 #else
@@ -68,6 +70,13 @@ __code u8 buildname[] = {
     #define MANUFACTURER   'R',0,'f',0,'C',0,'a',0,'t',0
     #define PROD_LEN       24
     #define PRODUCT_NAME   'D',0,'o',0,'n',0,'s',0,' ',0,'D',0,'o',0,'n',0,'g',0,'l',0,'e',0
+#elif YARDSTICKONE
+    #define ID_VENDOR      0x1D50
+    #define ID_PRODUCT     0x605b
+    #define MANU_LEN       40
+    #define MANUFACTURER   'G',0,'r',0,'e',0,'a',0,'t',0,' ',0,'S',0,'c',0,'o',0,'t',0,'t',0,' ',0,'G',0,'a',0,'d',0,'g',0,'e',0,'t',0,'s',0
+    #define PROD_LEN       30
+    #define PRODUCT_NAME   'Y',0,'A',0,'R',0,'D',0,' ',0,'S',0,'t',0,'i',0,'c',0,'k',0,' ',0,'O',0,'n',0,'e',0
 #elif defined CHRONOSDONGLE
     #define ID_VENDOR      0x1D50
     #define ID_PRODUCT     0x6047
@@ -90,7 +99,11 @@ int _usb_internal_handle_vendor(USB_Setup_Header* pReq);
 // * usb_data.usbstatus  - usb state overall...  (IDLE, SUSPEND, RESUME, RESET)
 // * ep#iobuf.ep_status  - endpoint status
 
-int txdata(u8 app, u8 cmd, u16 len, xdata u8* dataptr)      // assumed EP5 for application use
+/* txdata is used for communicating back to the host over USB.  
+ * return:  0 on success
+ *          -1 on failure
+ */
+int txdata(u8 app, u8 cmd, u16 len, __xdata u8* dataptr)      // assumed EP5 for application use
     // gonna try this direct this time, and ignore all the "state tracking" for the endpoint.
     // wish me luck!  this could horribly crash and burn.
 {
@@ -99,7 +112,7 @@ int txdata(u8 app, u8 cmd, u16 len, xdata u8* dataptr)      // assumed EP5 for a
     USBINDEX=5;
 
     while (len>0)
-     {
+    {
         // if we do this in the loop, for some reason ep5.flags never clears between frames.  
         // don't know why since this bit is cleared in the USB ISR.
         loop = TXDATA_MAX_WAIT;
@@ -166,6 +179,7 @@ int txdata(u8 app, u8 cmd, u16 len, xdata u8* dataptr)      // assumed EP5 for a
         dataptr += loop;
 
     }
+    return(0);
 }
 
 
@@ -325,7 +339,7 @@ int setup_send_ep0(u8* payload, u16 length)
 }
 
 /* send from XDATA */
-int setup_sendx_ep0(xdata u8* payload, u16 length)
+int setup_sendx_ep0(__xdata u8* payload, u16 length)
 {
     if (ep0.epstatus != EP_STATE_IDLE)
     {
@@ -385,7 +399,7 @@ u16 usb_recv_ep0OUT(){
      *******************************************************************************************/
     u16 loop;
 
-    xdata u8* payload = &ep0.OUTbuf[0];
+    __xdata u8* payload = &ep0.OUTbuf[0];
     while (! USBCS0 & USBCS0_OUTPKT_RDY);           // wait for it...
 
     USBINDEX = 0;
@@ -437,14 +451,14 @@ u16 usb_recv_ep0OUT(){
 //    cb_ep0out = callback;
 //}
 
-void registerCb_ep0Vendor(void (*callback)(void))
+void registerCb_ep0Vendor(int (*callback)(USB_Setup_Header*))
 {
     cb_ep0vendor = callback;
 }
 
-void registerCb_ep5(void (*callback)(void))
+void registerCb_ep5(int (*callback2)(void))
 {
-    cb_ep5 = callback;
+    cb_ep5 = callback2;
 }
 
 
@@ -750,7 +764,7 @@ int _usb_internal_handle_vendor(USB_Setup_Header* pReq)
     pReq = 0;
 #else
     u16 loop;
-    xdata u8* dst;
+    __xdata u8* dst;
 
     if (pReq->bmRequestType & USB_BM_REQTYPE_DIRMASK)       // IN to host
     {
@@ -760,16 +774,16 @@ int _usb_internal_handle_vendor(USB_Setup_Header* pReq)
                 setup_send_ep0(&lastCode[0], 2);
                 break;
             case EP0_CMD_GET_ADDRESS:
-                setup_sendx_ep0((xdata u8*)USBADDR, 40);
+                setup_sendx_ep0((__xdata u8*)USBADDR, 40);
                 break;
             case EP0_CMD_PEEKX:
-                setup_sendx_ep0((xdata u8*)pReq->wValue, pReq->wLength);
+                setup_sendx_ep0((__xdata u8*)pReq->wValue, pReq->wLength);
                 break;
             case EP0_CMD_PING0:
                 setup_send_ep0((u8*)pReq, pReq->wLength);
                 break;
             case EP0_CMD_PING1:
-                setup_sendx_ep0((xdata u8*)&ep0.OUTbuf[0], 16);//ep0.OUTlen);
+                setup_sendx_ep0((__xdata u8*)&ep0.OUTbuf[0], 16);//ep0.OUTlen);
                 break;
             case EP0_CMD_RESET:
                 if (strncmp((char*)&(pReq->wValue), "RSTN", 4))           // therefore, ->wValue == "RS" and ->wIndex == "TN" or no reset
@@ -788,7 +802,7 @@ int _usb_internal_handle_vendor(USB_Setup_Header* pReq)
         {
             case EP0_CMD_POKEX:     // poke
                 
-                dst = (xdata u8*) pReq->wValue;
+                dst = (__xdata u8*) pReq->wValue;
 
                 USBINDEX = 0;
                 loop = USBCNT0;
@@ -813,7 +827,7 @@ int handleOUTEP5(void)
 {
     // client is sending commands... or looking for information...  status... whatever...
     u16 len;
-    xdata u8* ptr; 
+    __xdata u8* ptr; 
     if (ep5.flags & EP_OUTBUF_WRITTEN)                     // have we processed the last OUTbuf?  don't want to clobber it.
     {
         // // // // FIXME: forget the second memory buffering... rework this to use just the buffering in the usb controller // // // // 
@@ -923,10 +937,10 @@ int handleOUTEP5(void)
 void processOUTEP5(void)
 {
     u16 loop;
-    xdata u8* ptr; 
+    __xdata u8* ptr; 
 
     // if the buffer is still being loaded or just plain empty, ignore this  (superfluous... may remove this check later)
-    if (ep5.flags & EP_OUTBUF_WRITTEN == 0)
+    if ((ep5.flags & EP_OUTBUF_WRITTEN) == 0)
         return;
 
     ptr = &ep5.OUTbuf[0];
@@ -942,7 +956,7 @@ void processOUTEP5(void)
 
                 loop =  (u16)*ptr++;
                 loop += (u16)*ptr++ << 8;
-                ptr = (xdata u8*) loop;
+                ptr = (__xdata u8*) loop;
 
                 txdata(ep5.OUTapp, ep5.OUTcmd, ep5.OUTbytesleft, ptr);
                 ep5.OUTbytesleft = 0;
@@ -951,7 +965,7 @@ void processOUTEP5(void)
             case CMD_POKE:
                     loop =  *ptr++;
                     loop += *ptr++ << 8;
-                    ep5.dptr = (xdata u8*) loop;                                // hack, but it works
+                    ep5.dptr = (__xdata u8*) loop;                                // hack, but it works
 
                     loop = ep5.OUTlen - 2;
 
@@ -969,7 +983,7 @@ void processOUTEP5(void)
                 {
                     loop =  *ptr++;
                     loop += *ptr++ << 8;
-                    ep5.dptr = (xdata u8*) loop;                                // hack, but it works
+                    ep5.dptr = (__xdata u8*) loop;                                // hack, but it works
                 }
                 // FIXME: do we want to DMA here?
                 
@@ -995,16 +1009,16 @@ void processOUTEP5(void)
                 break;
 
             case CMD_STATUS:
-                txdata(ep5.OUTapp, ep5.OUTcmd, 13, (xdata u8*)"UNIMPLEMENTED");
+                txdata(ep5.OUTapp, ep5.OUTcmd, 13, (__xdata u8*)"UNIMPLEMENTED");
                 // unimplemented
                 break;
 
             case CMD_GET_CLOCK:
-                txdata(ep5.OUTapp, ep5.OUTcmd, 4, (xdata u8*)clock);
+                txdata(ep5.OUTapp, ep5.OUTcmd, 4, (__xdata u8*)clock);
                 break;
 
             case CMD_BUILDTYPE:
-                txdata(ep5.OUTapp, ep5.OUTcmd, sizeof(buildname), (xdata u8*)&buildname[0]);
+                txdata(ep5.OUTapp, ep5.OUTcmd, sizeof(buildname), (__xdata u8*)&buildname[0]);
                 break;
 
             case CMD_BOOTLOADER:
@@ -1012,6 +1026,24 @@ void processOUTEP5(void)
                 txdata(ep5.OUTapp,ep5.OUTcmd,ep5.OUTlen,ptr);
                 sleepMillis(200);
                 run_bootloader();
+                break;
+                
+            case CMD_RFMODE:
+                switch (*ptr++)
+                {
+                    case RFST_SRX:
+                        RxMode();
+                        break;
+                    case RFST_SIDLE:
+                        LED = 0;
+                        IdleMode();
+                        break;
+                    case RFST_STX:
+                        TxMode();
+                        break;
+                }
+                //appReturn(ep5.OUTlen,buf);
+                txdata(ep5.OUTapp,ep5.OUTcmd,ep5.OUTlen,ptr);
                 break;
 
             case CMD_RESET:
@@ -1301,10 +1333,7 @@ __code u8 USBDESCBEGIN [] = {
 // Serial number
                10,                      // bLength
                USB_DESC_STRING,         // bDescriptorType
-              '0', 0,
-              '2', 0,
-              '1', 0,
-              '6', 0,
+               USB_DEVICE_SERIAL_NUMBER
           
 // END OF STRINGS (len 0, type ff)
                0, 0xff
